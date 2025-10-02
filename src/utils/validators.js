@@ -101,14 +101,18 @@ const sanitizeString = (str) => {
 const validateLoginCredentials = (username, password) => {
   const errors = [];
 
+  // Sanitize first
+  const sanitizedUsername = sanitizeString(username);
+  const sanitizedPassword = sanitizeString(password);
+
   // Validate username
-  const usernameErrors = validateUsername(username);
+  const usernameErrors = validateUsername(sanitizedUsername);
   errors.push(...usernameErrors);
 
   // Basic password validation (not complexity for login)
-  if (!password) {
+  if (!sanitizedPassword) {
     errors.push('Password is required');
-  } else if (typeof password !== 'string') {
+  } else if (typeof sanitizedPassword !== 'string') {
     errors.push('Password must be a string');
   }
 
@@ -117,8 +121,8 @@ const validateLoginCredentials = (username, password) => {
   }
 
   return {
-    username: sanitizeString(username),
-    password: sanitizeString(password)
+    username: sanitizedUsername,
+    password: sanitizedPassword
   };
 };
 
@@ -128,12 +132,17 @@ const validateLoginCredentials = (username, password) => {
 const validateRegistrationData = (username, password, email) => {
   const errors = [];
 
-  // Validate all fields
-  errors.push(...validateUsername(username));
-  errors.push(...validatePassword(password));
+  // Sanitize first
+  const sanitizedUsername = sanitizeString(username);
+  const sanitizedPassword = sanitizeString(password);
+  const sanitizedEmail = email ? sanitizeString(email) : undefined;
 
-  if (email) {
-    errors.push(...validateEmail(email));
+  // Validate all fields
+  errors.push(...validateUsername(sanitizedUsername));
+  errors.push(...validatePassword(sanitizedPassword));
+
+  if (sanitizedEmail) {
+    errors.push(...validateEmail(sanitizedEmail));
   }
 
   if (errors.length > 0) {
@@ -141,9 +150,9 @@ const validateRegistrationData = (username, password, email) => {
   }
 
   return {
-    username: sanitizeString(username),
-    password: sanitizeString(password),
-    email: email ? sanitizeString(email) : undefined
+    username: sanitizedUsername,
+    password: sanitizedPassword,
+    email: sanitizedEmail
   };
 };
 
