@@ -1,0 +1,143 @@
+name: Snyk Security Scan
+
+on:
+  push:
+    branches:
+      - main
+      - master
+      - develop
+      - 'feat/**'
+  pull_request:
+    types: [opened, synchronize, reopened]
+  schedule:
+    # Run daily at 2 AM UTC to catch new vulnerabilities
+    - cron: '0 2 * * *'
+
+jobs:
+  snyk-security:
+    name: Snyk Security Analysis
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+      
+      - name: Install dependencies
+        run: npm ci
+      
+      # Snyk Code - Static Application Security Testing (SAST)
+      - name: Run Snyk Code Test
+        uses: snyk/actions/node@master
+        continue-on-error: true
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        with:
+          command: code test
+          args: --sarif-file-output=snyk-code.sarif
+      
+      # Snyk Open Source - Dependency vulnerability scanning
+      - name: Run Snyk Open Source Test
+        uses: snyk/actions/node@master
+        continue-on-error: true
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        with:
+          command: test
+          args: --severity-threshold=low --json-file-output=snyk-opensoure.json
+      
+      # Snyk Monitor - Track dependencies over time
+      - name: Monitor project with Snyk
+        uses: snyk/actions/node@master
+        continue-on-error: true
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        with:
+          command: monitor
+      
+      # Upload results to GitHub Code Scanning
+      - name: Upload Snyk results to GitHub Code Scanning
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: snyk-code.sarif
+      
+      # Generate human-readable report
+      - name: Generate Snyk Report
+        if: always()
+        run: |
+          echo "# Snyk Security Scan Results" > snyk-report.md
+          echo "" >> snyk-report.md
+          echo "**Scan Date:** $(date)" >> snyk-report.md
+          echo "" >> snyk-report.md
+          
+          if [ -f snyk-opensoure.json ]; then
+            echo "## Open Source Dependencies" >> snyk-report.md
+            echo "\`\`\`json" >> snyk-report.md
+            cat snyk-opensoure.json | jq '.vulnerabilities | length' >> snyk-report.md
+            echo "\`\`\`" >> snyk-report.md
+          fi
+      
+      # Upload artifacts
+      - name: Upload Snyk reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: snyk-security-reports
+          path: |
+            snyk-code.sarif
+            snyk-opensoure.json
+            snyk-report.md
+          retention-days: 30
+      
+      # Create PR comment with results (only on PRs)
+      - name: Comment PR with Snyk Results
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        continue-on-error: true
+        with:
+          script: |
+            const fs = require('fs');
+            let comment = '## 🔒 Snyk Security Scan Results\n\n';
+            
+            if (fs.existsSync('snyk-opensoure.json')) {
+              try {
+                const snykData = JSON.parse(fs.readFileSync('snyk-opensoure.json', 'utf8'));
+                const vulns = snykData.vulnerabilities || [];
+                const critical = vulns.filter(v => v.severity === 'critical').length;
+                const high = vulns.filter(v => v.severity === 'high').length;
+                const medium = vulns.filter(v => v.severity === 'medium').length;
+                const low = vulns.filter(v => v.severity === 'low').length;
+                
+                comment += '### Dependencies Vulnerabilities\n';
+                comment += `- 🔴 Critical: ${critical}\n`;
+                comment += `- 🟠 High: ${high}\n`;
+                comment += `- 🟡 Medium: ${medium}\n`;
+                comment += `- 🟢 Low: ${low}\n\n`;
+                
+                if (critical > 0 || high > 0) {
+                  comment += '⚠️ **Action Required:** High or critical vulnerabilities detected!\n\n';
+                }
+              } catch (error) {
+                comment += '⚠️ Error parsing Snyk results\n\n';
+              }
+            }
+            
+            comment += '\n📊 [View detailed results in Actions artifacts](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})\n';
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });
+

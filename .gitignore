@@ -1,6 +1,5 @@
 # Dependencies
 node_modules/
-package-lock.json
 
 # Environment variables
 .env
@@ -36,6 +35,13 @@ Thumbs.db
 # SonarQube
 .sonarqube/
 .scannerwork/
+
+# Snyk
+.snyk.d.ts
+snyk-report.json
+snyk-opensoure.json
+snyk-code.sarif
+snyk-report.md
 
 # Temporary files
 *.tmp

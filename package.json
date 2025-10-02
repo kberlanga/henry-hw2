@@ -11,6 +11,9 @@
     "sonar": "npm run test:coverage && sonar-scanner",
     "sonar:local": "npm run test:coverage && sonar-scanner -Dsonar.host.url=http://localhost:9000",
     "quality:check": "npm run lint && npm run test:coverage",
+    "security:check": "snyk test --severity-threshold=high",
+    "security:monitor": "snyk monitor",
+    "security:code": "snyk code test",
     "start": "node src/server.js",
     "dev": "nodemon src/server.js"
   },
