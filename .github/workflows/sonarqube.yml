@@ -55,7 +55,7 @@ jobs:
         with:
           args: >
             -Dsonar.projectKey=cloudtech-monitoring
-            -Dsonar.projectName=CloudTech Monitoring System
+            -Dsonar.projectName="CloudTech Monitoring System"
             -Dsonar.projectVersion=1.0
             -Dsonar.sources=src
             -Dsonar.tests=tests
