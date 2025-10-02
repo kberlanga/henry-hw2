@@ -36,6 +36,7 @@ jobs:
         run: npm ci
       
       # Snyk Code - Static Application Security Testing (SAST)
+      # Note: Snyk Code may require a paid plan or may not generate SARIF for all scans
       - name: Run Snyk Code Test
         uses: snyk/actions/node@master
         continue-on-error: true
@@ -67,7 +68,7 @@ jobs:
       # Upload results to GitHub Code Scanning
       - name: Upload Snyk results to GitHub Code Scanning
         uses: github/codeql-action/upload-sarif@v3
-        if: always()
+        if: always() && hashFiles('snyk-code.sarif') != ''
         with:
           sarif_file: snyk-code.sarif
       
@@ -98,6 +99,7 @@ jobs:
             snyk-opensoure.json
             snyk-report.md
           retention-days: 30
+          if-no-files-found: ignore
       
       # Create PR comment with results (only on PRs)
       - name: Comment PR with Snyk Results
