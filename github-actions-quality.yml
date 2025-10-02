@@ -1,0 +1,427 @@
+name: Quality Assurance Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+env:
+  NODE_VERSION: "18"
+  SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+  SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+
+jobs:
+  # Job 1: Análisis de código estático
+  static-analysis:
+    name: Static Code Analysis
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Necesario para SonarQube
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run ESLint
+        run: |
+          npx eslint . --format json --output-file eslint-report.json
+          npx eslint . --format stylish
+
+      - name: Run Prettier check
+        run: npx prettier --check .
+
+      - name: Upload ESLint report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: eslint-report
+          path: eslint-report.json
+
+      - name: Comment PR with ESLint results
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            if (fs.existsSync('eslint-report.json')) {
+              const report = JSON.parse(fs.readFileSync('eslint-report.json', 'utf8'));
+              const errors = report.reduce((acc, file) => acc + file.errorCount, 0);
+              const warnings = report.reduce((acc, file) => acc + file.warningCount, 0);
+              
+              const comment = `## 📝 ESLint Results
+              
+              - **Errors:** ${errors}
+              - **Warnings:** ${warnings}
+              - **Files analyzed:** ${report.length}
+              
+              ${errors > 0 ? '❌ **Action required:** Please fix ESLint errors before merging.' : '✅ **All good:** No ESLint errors found.'}`;
+              
+              github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: comment
+              });
+            }
+
+  # Job 2: Análisis de seguridad
+  security-analysis:
+    name: Security Analysis
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run npm audit
+        run: |
+          npm audit --json > security-report.json || true
+          npm audit --audit-level=moderate
+
+      - name: Run Snyk security scan
+        uses: snyk/actions/node@master
+        continue-on-error: true
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        with:
+          args: --severity-threshold=high --json-file-output=snyk-report.json
+
+      - name: Upload security reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: security-reports
+          path: |
+            security-report.json
+            snyk-report.json
+
+      - name: Comment PR with security results
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let comment = '## 🔒 Security Analysis Results\n\n';
+
+            if (fs.existsSync('security-report.json')) {
+              const report = JSON.parse(fs.readFileSync('security-report.json', 'utf8'));
+              const vulnerabilities = report.vulnerabilities || 0;
+              comment += `- **NPM Audit:** ${vulnerabilities} vulnerabilities found\n`;
+            }
+
+            if (fs.existsSync('snyk-report.json')) {
+              const snykReport = JSON.parse(fs.readFileSync('snyk-report.json', 'utf8'));
+              const highVulns = snykReport.vulnerabilities?.filter(v => v.severity === 'high').length || 0;
+              comment += `- **Snyk:** ${highVulns} high severity vulnerabilities\n`;
+            }
+
+            comment += '\n' + (comment.includes('0 vulnerabilities') ? '✅ **All good:** No security issues found.' : '⚠️ **Action required:** Please review security vulnerabilities.');
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });
+
+  # Job 3: Testing
+  testing:
+    name: Testing
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run unit tests
+        run: |
+          npm test -- --coverage --coverageReporters=json --coverageReporters=lcov
+
+      - name: Upload coverage reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-reports
+          path: coverage/
+
+      - name: Comment PR with test results
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            if (fs.existsSync('coverage/coverage-summary.json')) {
+              const coverage = JSON.parse(fs.readFileSync('coverage/coverage-summary.json', 'utf8'));
+              const total = coverage.total;
+              
+              const comment = `## 🧪 Test Results
+              
+              - **Lines:** ${total.lines.pct}% (${total.lines.covered}/${total.lines.total})
+              - **Functions:** ${total.functions.pct}% (${total.functions.covered}/${total.functions.total})
+              - **Branches:** ${total.branches.pct}% (${total.branches.covered}/${total.branches.total})
+              - **Statements:** ${total.statements.pct}% (${total.statements.covered}/${total.statements.total})
+              
+              ${total.lines.pct >= 80 ? '✅ **Coverage target met:** Great job!' : '⚠️ **Coverage below target:** Please add more tests.'}`;
+              
+              github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: comment
+              });
+            }
+
+  # Job 4: Análisis con SonarQube
+  sonar-analysis:
+    name: SonarQube Analysis
+    runs-on: ubuntu-latest
+    needs: [static-analysis, security-analysis, testing]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Download coverage reports
+        uses: actions/download-artifact@v4
+        with:
+          name: coverage-reports
+          path: coverage/
+
+      - name: Run SonarQube analysis
+        uses: sonarqube-quality-gate-action@master
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+        with:
+          args: >
+            -Dsonar.projectKey=${{ github.repository }}
+            -Dsonar.organization=${{ github.repository_owner }}
+            -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info
+            -Dsonar.coverage.exclusions=**/*.test.js,**/*.spec.js
+            -Dsonar.qualitygate.wait=true
+
+  # Job 5: Análisis con IA
+  ai-analysis:
+    name: AI Code Analysis
+    runs-on: ubuntu-latest
+    needs: [static-analysis, security-analysis, testing]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Download analysis reports
+        uses: actions/download-artifact@v4
+        with:
+          name: eslint-report
+          path: reports/
+
+      - name: Run AI code analysis
+        run: |
+          node scripts/ai-code-analysis.js \
+            --eslint-report reports/eslint-report.json \
+            --output ai-analysis-report.json
+
+      - name: Upload AI analysis report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ai-analysis-report
+          path: ai-analysis-report.json
+
+      - name: Comment PR with AI analysis
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            if (fs.existsSync('ai-analysis-report.json')) {
+              const report = JSON.parse(fs.readFileSync('ai-analysis-report.json', 'utf8'));
+              
+              const comment = `## 🤖 AI Code Analysis
+              
+              **Overall Score:** ${report.overallScore}/100
+              
+              **Recommendations:**
+              ${report.recommendations.map(rec => `- [${rec.priority.toUpperCase()}] ${rec.title}`).join('\n')}
+              
+              **AI Insights:**
+              ${report.insights.join('\n')}`;
+              
+              github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: comment
+              });
+            }
+
+  # Job 6: Quality Gate
+  quality-gate:
+    name: Quality Gate
+    runs-on: ubuntu-latest
+    needs:
+      [static-analysis, security-analysis, testing, sonar-analysis, ai-analysis]
+    if: always()
+
+    steps:
+      - name: Download all reports
+        uses: actions/download-artifact@v4
+        with:
+          name: |
+            eslint-report
+            security-reports
+            coverage-reports
+            ai-analysis-report
+          path: reports/
+
+      - name: Run quality gate check
+        run: |
+          node scripts/quality-gate.js \
+            --eslint reports/eslint-report.json \
+            --security reports/security-report.json \
+            --coverage reports/coverage/coverage-summary.json \
+            --ai reports/ai-analysis-report.json \
+            --output quality-gate-result.json
+
+      - name: Upload quality gate result
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: quality-gate-result
+          path: quality-gate-result.json
+
+      - name: Comment PR with quality gate result
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            if (fs.existsSync('quality-gate-result.json')) {
+              const result = JSON.parse(fs.readFileSync('quality-gate-result.json', 'utf8'));
+              
+              const status = result.passed ? '✅ PASSED' : '❌ FAILED';
+              const color = result.passed ? 'green' : 'red';
+              
+              const comment = `## 🚪 Quality Gate Result
+              
+              **Status:** ${status}
+              
+              **Checks:**
+              ${result.checks.map(check => 
+                `- ${check.passed ? '✅' : '❌'} ${check.name}: ${check.message}`
+              ).join('\n')}
+              
+              **Overall Score:** ${result.overallScore}/100
+              
+              ${result.passed ? 
+                '🎉 **Ready to merge!** All quality checks passed.' : 
+                '⚠️ **Action required:** Please address the failing quality checks before merging.'
+              }`;
+              
+              github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: comment
+              });
+            }
+
+      - name: Fail if quality gate failed
+        if: github.event_name == 'pull_request'
+        run: |
+          if [ -f quality-gate-result.json ]; then
+            PASSED=$(node -p "JSON.parse(require('fs').readFileSync('quality-gate-result.json', 'utf8')).passed")
+            if [ "$PASSED" != "true" ]; then
+              echo "Quality gate failed. Please address the issues before merging."
+              exit 1
+            fi
+          fi
+
+  # Job 7: Deploy (solo en main)
+  deploy:
+    name: Deploy
+    runs-on: ubuntu-latest
+    needs: [quality-gate]
+    if: github.ref == 'refs/heads/main' && needs.quality-gate.result == 'success'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build application
+        run: npm run build
+
+      - name: Deploy to staging
+        run: |
+          echo "Deploying to staging environment..."
+          # Aquí irían los comandos de deploy reales
+
+      - name: Run smoke tests
+        run: |
+          echo "Running smoke tests..."
+          # Aquí irían los tests de smoke reales
+
+      - name: Deploy to production
+        if: success()
+        run: |
+          echo "Deploying to production environment..."
+          # Aquí irían los comandos de deploy a producción reales

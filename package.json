@@ -4,7 +4,13 @@
   "description": "Distributed monitoring system for cloud infrastructure",
   "scripts": {
     "test": "jest",
+    "test:coverage": "jest --coverage",
+    "test:watch": "jest --watch",
     "lint": "eslint src/**/*.js",
+    "lint:fix": "eslint src/**/*.js --fix",
+    "sonar": "npm run test:coverage && sonar-scanner",
+    "sonar:local": "npm run test:coverage && sonar-scanner -Dsonar.host.url=http://localhost:9000",
+    "quality:check": "npm run lint && npm run test:coverage",
     "start": "node src/server.js",
     "dev": "nodemon src/server.js"
   },
